@@ -5,7 +5,7 @@ from torch import nn, optim
 from torch.nn import functional as F
 from torchvision import transforms, utils
 from torch.utils.data import Dataset, DataLoader
-from typing import List, Set, Dict, Tuple, Optional
+from typing import List
 
 """ 
 Inspiration from: https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py 
@@ -14,8 +14,9 @@ Intended behaviour:
 
 layers = [(out_channels, kernel, stride, padding), (kernel2, stride2, padding2) ... ]
 
-"""
 
+TODO: Integrate Unflatten module 
+"""
 
 def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
     """ Assumes that the image in question is square """
@@ -24,8 +25,6 @@ def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
     assert stride > 0, "stride is less than or equal to 0"
     assert padding > -1, "padding is less than 0"
     return ((img_dim - kernel_size + 2 * padding) / stride) + 1
-
-
 
 
 class ConvVAE(nn.Module):
@@ -59,6 +58,12 @@ class ConvVAE(nn.Module):
             dim = get_result_dim(img_dim=dim, kernel_size=tuple[1], stride=tuple[2], padding=tuple[3])
             in_channels = tuple[0]
 
+        modules.append(
+            nn.Sequential(
+                nn.Flatten()
+            )
+        )
+
         self.encoder = nn.Sequential(*modules)
         self.mu_layer = nn.Linear(in_features=(layers[-1][0] * (dim ** 2)),
                                   out_features=self.latent_dim)
@@ -70,6 +75,13 @@ class ConvVAE(nn.Module):
         # Decoder
         modules = []
         layers.reverse()
+
+        modules.append(
+            nn.Sequential(
+                UnFlatten()
+            )
+        )
+
         for i in range(len(layers) - 1):
             modules.append(
                 nn.Sequential(
@@ -96,5 +108,15 @@ class ConvVAE(nn.Module):
 
         self.decoder = nn.Sequential(*modules)
 
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
-
+    def forward(self, state):
+        post_encoder = self.encoder(state)
+        mu, logvar = self.mu_layer(post_encoder), self.logvar_layer(post_encoder)
+        z = self.reparameterize(mu, logvar)
+        z = self.transition_layer(z)
+        post_decoder = self.decoder(z)
+        return post_decoder, mu, logvar
