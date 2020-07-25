@@ -1,10 +1,5 @@
-import numpy as np
 import torch
-
-from torch import nn, optim
-from torch.nn import functional as F
-from torchvision import transforms, utils
-from torch.utils.data import Dataset, DataLoader
+from torch import nn
 from typing import List
 
 """ 
@@ -14,8 +9,7 @@ Intended behaviour:
 
 layers = [(out_channels, kernel, stride, padding), (kernel2, stride2, padding2) ... ]
 
-
-TODO: Integrate Unflatten module 
+TODO: Test and integrate.
 """
 
 def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
@@ -27,12 +21,12 @@ def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
     return ((img_dim - kernel_size + 2 * padding) / stride) + 1
 
 
+class UnFlatten(nn.Module):
+    def forward(self, x, in_dimension):
+        return x.view(-1, self.layers[-1], 45, 45)
+
+
 class ConvVAE(nn.Module):
-
-    class UnFlatten(nn.Module):
-        def forward(self, x):
-            return x.view(-1, self.layers[-1], 45, 45)
-
     def __init__(self, img_dim: int, layers: List, in_channels: int, latent_dim: int, cuda:bool):
         super(ConvVAE, self).__init__()
 
