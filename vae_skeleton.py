@@ -8,13 +8,13 @@ Inspiration from: https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanil
 """
 
 
-def clean_layers(layers: List, threeD: bool):
+def clean_layers(layers: List, three_dimensional: bool):
     """
-    :param threeD: bool indicating whether or not the layer format is for a 3d network
+    :param three_dimensional: bool indicating whether or not the layer format is for a 3d network
     :type layers: List
     :return layers: List with all instances of None converted to tuples of 0s.
     """
-    if threeD:
+    if three_dimensional:
         for module in layers:
             if module[6] is None:
                 module[6] = (0, 0, 0)
@@ -23,10 +23,10 @@ def clean_layers(layers: List, threeD: bool):
         return layers
 
     for module in layers:
-        if module[6] is None:
-            module[6] = (0, 0)
-        if module[7] is None:
-            module[7] = (0, 0)
+        if module[4] is None:
+            module[4] = (0, 0)
+        if module[5] is None:
+            module[5] = (0, 0)
     return layers
 
 
@@ -35,89 +35,88 @@ def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
     assert kernel_size > 0, "kernel_size is less than or equal to 0"
     assert img_dim > 0, "img_dimension is less than or equal to 0"
     assert stride > 0, "stride is less than or equal to 0"
-    assert padding > -1, "padding is less than 0"
     return math.floor(((img_dim - kernel_size + 2 * padding) / stride) + 1)
 
 
-class UnFlatten(nn.Module):
-    def forward(self, x, in_dimension):
-        return x.view(-1, self.layers[-1], 45, 45)
+class Conv2DVAE(nn.Module):
+    def __init__(self, x_dim: int, layers: List, in_channels: int, latent_dim: int, device: torch.device):
+        """
+        :param x_dim: Assumes images are square, x_dim is the length of a side of the square.
+        :param layers: List<List> of length n, where n defines the number of layers in the encoder and decoder.
+                       Each list in this list must follow the following order:
+                       [in_channels:int, out_channels:int, kernel_size:int, stride:int, padding:tuple,
+                       output_padding:tuple]
+        :param in_channels: Number of input channels per image
+        :param latent_dim: Size of the latent dimension (mu and logvar vectors) / encoded representation.
+        :param device: torch.device object defining the device you want to train on.
+        """
+        super(Conv2DVAE, self).__init__()
 
+        new_layers = clean_layers(layers, False)
 
-class ConvVAE(nn.Module):
-    def __init__(self, img_dim: int, layers: List, in_channels: int, latent_dim: int, cuda: bool):
-        super(ConvVAE, self).__init__()
-
+        self.x_dim = x_dim
         self.in_channels = in_channels
         self.latent_dim = latent_dim
-        self.layers = layers
-        self.cuda = cuda
+        self.layers = new_layers
+        self.device = device
 
         # Encoder
         modules = []
-        dim = img_dim
-        for tuple in layers:
+        current_x_dim = x_dim
+        current_channels = in_channels
+        for module in self.layers:
             modules.append(
                 nn.Sequential(
-                    nn.Conv2d(in_channels,
-                              out_channels=tuple[0],
-                              kernel_size=tuple[1],
-                              stride=tuple[2],
-                              padding=tuple[3]),
+                    nn.Conv2d(in_channels=module[0],
+                              out_channels=module[1],
+                              kernel_size=module[2],
+                              stride=module[3],
+                              padding=module[4]),
                     nn.ReLU()
                 )
             )
-            dim = get_result_dim(img_dim=dim, kernel_size=tuple[1], stride=tuple[2], padding=tuple[3])
-            in_channels = tuple[0]
-
-        modules.append(
-            nn.Sequential(
-                nn.Flatten()
-            )
-        )
+            current_x_dim = get_result_dim(img_dim=current_x_dim, kernel_size=module[2], stride=module[3],
+                                           padding=module[4][0])
+            current_channels = module[1]
 
         self.encoder = nn.Sequential(*modules)
-        self.mu_layer = nn.Linear(in_features=(layers[-1][0] * (dim ** 2)),
-                                  out_features=self.latent_dim)
-        self.logvar_layer = nn.Linear(in_features=(layers[-1][0] * (dim ** 2)),
-                                      out_features=self.latent_dim)
-        self.transition_layer = nn.Linear(in_features=self.latent_dim,
-                                          out_features=layers[-1][0] * (dim ** 2))
+
+        self.mu_layer = nn.Conv2d(in_channels=current_channels, out_channels=latent_dim, kernel_size=current_x_dim,
+                                  stride=1)
+        self.logvar_layer = nn.Conv2d(in_channels=current_channels, out_channels=latent_dim, kernel_size=current_x_dim,
+                                      stride=1)
+        self.transition_layer = nn.ConvTranspose2d(in_channels=latent_dim, out_channels=current_channels,
+                                                   kernel_size=current_x_dim, stride=1)
 
         # Decoder
         modules = []
         layers.reverse()
 
-        modules.append(
-            nn.Sequential(
-                UnFlatten()
-            )
-        )
-
-        for i in range(len(layers) - 1):
+        for i in range(len(self.layers) - 1):
+            module = self.layers[i]
             modules.append(
                 nn.Sequential(
-                    nn.ConvTranspose2d(in_channels=layers[i][0],
-                                       out_channels=layers[i + 1][0],
-                                       kernel_size=layers[i][1],
-                                       stride=layers[i][2],
-                                       padding=layers[i][3]),
+                    nn.ConvTranspose2d(in_channels=module[1],
+                                       out_channels=module[0],
+                                       kernel_size=module[2],
+                                       stride=module[3],
+                                       output_padding=module[5]),
                     nn.ReLU()
                 )
             )
 
         # Final Layer
+        module = layers[-1]
         modules.append(
             nn.Sequential(
-                nn.ConvTranspose2d(in_channels=layers[-1][0],
-                                   out_channels=self.in_channels,
-                                   kernel_size=layers[-1][1],
-                                   stride=layers[-1][2],
-                                   padding=layers[-1][3]
+                nn.ConvTranspose2d(in_channels=module[1],
+                                   out_channels=module[0],
+                                   kernel_size=module[2],
+                                   stride=module[3],
+                                   output_padding=module[5],
                                    )
             )
         )
-
         self.decoder = nn.Sequential(*modules)
 
     def reparameterize(self, mu, logvar):
@@ -130,8 +129,13 @@ class ConvVAE(nn.Module):
         mu, logvar = self.mu_layer(post_encoder), self.logvar_layer(post_encoder)
         z = self.reparameterize(mu, logvar)
         z = self.transition_layer(z)
-        post_decoder = self.decoder(z)
-        return post_decoder, mu, logvar
+        y = self.decoder(z)
+
+        if y.shape[1:] != (self.in_channels, self.x_dim, self.x_dim):
+            y = y[:, :self.in_channels, :self.x_dim, :self.x_dim]
+
+        probs = torch.sigmoid(y)
+        return y, probs, mu, logvar
 
 
 class Conv3dVAE(nn.Module):
@@ -210,7 +214,6 @@ class Conv3dVAE(nn.Module):
                                        out_channels=module[0],
                                        kernel_size=(module[3], module[2], module[2]),
                                        stride=(module[5], module[4], module[4]),
-                                       padding=module[6],
                                        output_padding=module[7]
                                        ),
                     nn.ReLU()
