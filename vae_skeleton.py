@@ -8,6 +8,13 @@ Inspiration from: https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanil
 """
 
 
+def validate_layer(module: List, three_dimensional: bool):
+    if three_dimensional:
+        assert len(module) == 8, "Number of elements in 3D layer is invalid"
+    else:
+        assert len(module) == 6, "Number of elements in 2D layers invalid"
+
+
 def clean_layers(layers: List, three_dimensional: bool):
     """
     :param three_dimensional: bool indicating whether or not the layer format is for a 3d network
@@ -16,6 +23,7 @@ def clean_layers(layers: List, three_dimensional: bool):
     """
     if three_dimensional:
         for module in layers:
+            validate_layer(module, three_dimensional)
             if module[6] is None:
                 module[6] = (0, 0, 0)
             if module[7] is None:
@@ -23,6 +31,7 @@ def clean_layers(layers: List, three_dimensional: bool):
         return layers
 
     for module in layers:
+        validate_layer(module, three_dimensional)
         if module[4] is None:
             module[4] = (0, 0)
         if module[5] is None:
@@ -66,14 +75,14 @@ class Conv2DVAE(nn.Module):
         current_channels = in_channels
         for module in self.layers:
             modules.append(
-                nn.Sequential(
-                    nn.Conv2d(in_channels=module[0],
-                              out_channels=module[1],
-                              kernel_size=module[2],
-                              stride=module[3],
-                              padding=module[4]),
-                    nn.ReLU()
-                )
+                nn.Conv2d(in_channels=module[0],
+                          out_channels=module[1],
+                          kernel_size=module[2],
+                          stride=module[3],
+                          padding=module[4]),
+            )
+            modules.append(
+                nn.ReLU()
             )
             current_x_dim = get_result_dim(img_dim=current_x_dim, kernel_size=module[2], stride=module[3],
                                            padding=module[4][0])
@@ -95,27 +104,25 @@ class Conv2DVAE(nn.Module):
         for i in range(len(self.layers) - 1):
             module = self.layers[i]
             modules.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(in_channels=module[1],
-                                       out_channels=module[0],
-                                       kernel_size=module[2],
-                                       stride=module[3],
-                                       output_padding=module[5]),
-                    nn.ReLU()
-                )
+                nn.ConvTranspose2d(in_channels=module[1],
+                                   out_channels=module[0],
+                                   kernel_size=module[2],
+                                   stride=module[3],
+                                   output_padding=module[5]),
+            )
+            modules.append(
+                nn.ReLU()
             )
 
         # Final Layer
         module = layers[-1]
         modules.append(
-            nn.Sequential(
-                nn.ConvTranspose2d(in_channels=module[1],
-                                   out_channels=module[0],
-                                   kernel_size=module[2],
-                                   stride=module[3],
-                                   output_padding=module[5],
-                                   )
-            )
+            nn.ConvTranspose2d(in_channels=module[1],
+                               out_channels=module[0],
+                               kernel_size=module[2],
+                               stride=module[3],
+                               output_padding=module[5],
+                               )
         )
         self.decoder = nn.Sequential(*modules)
 
@@ -173,15 +180,14 @@ class Conv3dVAE(nn.Module):
         # Encoder
         for module in self.layers:
             modules.append(
-                nn.Sequential(
-                    nn.Conv3d(in_channels=module[0],
-                              out_channels=module[1],
-                              kernel_size=(module[3], module[2], module[2]),
-                              stride=(module[5], module[4], module[4]),
-                              padding=module[6]
-                              ),
-                    nn.ReLU()
-                )
+                nn.Conv3d(in_channels=module[0],
+                          out_channels=module[1],
+                          kernel_size=(module[3], module[2], module[2]),
+                          stride=(module[5], module[4], module[4]),
+                          padding=module[6])
+            )
+            modules.append(
+                nn.ReLU()
             )
             current_channels = module[1]
 
@@ -209,29 +215,27 @@ class Conv3dVAE(nn.Module):
         for i in range(len(self.layers) - 1):
             module = self.layers[i]
             modules.append(
-                nn.Sequential(
-                    nn.ConvTranspose3d(in_channels=module[1],
-                                       out_channels=module[0],
-                                       kernel_size=(module[3], module[2], module[2]),
-                                       stride=(module[5], module[4], module[4]),
-                                       output_padding=module[7]
-                                       ),
-                    nn.ReLU()
-                )
+                nn.ConvTranspose3d(in_channels=module[1],
+                                   out_channels=module[0],
+                                   kernel_size=(module[3], module[2], module[2]),
+                                   stride=(module[5], module[4], module[4]),
+                                   output_padding=module[7]
+                                   ),
+            )
+            modules.append(
+                nn.ReLU()
             )
 
         # Final layer - no ReLU activation
         module = layers[-1]
         modules.append(
-            nn.Sequential(
-                nn.ConvTranspose3d(
-                    in_channels=module[1],
-                    out_channels=module[0],
-                    kernel_size=(module[3], module[2], module[2]),
-                    stride=(module[5], module[4], module[4]),
-                    padding=(0, 0, 0),
-                    output_padding=module[7]
-                )
+            nn.ConvTranspose3d(
+                in_channels=module[1],
+                out_channels=module[0],
+                kernel_size=(module[3], module[2], module[2]),
+                stride=(module[5], module[4], module[4]),
+                padding=(0, 0, 0),
+                output_padding=module[7]
             )
         )
 
