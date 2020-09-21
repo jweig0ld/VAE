@@ -1,5 +1,6 @@
 import torch
 import math
+import time
 from torch import nn
 from typing import List
 
@@ -144,6 +145,79 @@ class Conv2DVAE(nn.Module):
         probs = torch.sigmoid(y)
         return y, probs, mu, logvar
 
+    def loss_function(self, recon_x, x, mu, logvar, **kwargs):
+        """
+        :param recon_x: Reconstructed batch of shape (N, C, H, W)
+        :param x: Original input batch of shape (N, C, H, W)
+        :param mu: Encoded mu representation of x.
+        :param logvar: Encoded logvar representation of x.
+        :param kwargs: Expecting beta=(scalar), gamma=(scalar), C=(scalar).
+        :return: BCE (Binary Cross-Entropy) Loss (scalar). KLD (Kullback-Leibler Divergence) loss (scalar).
+                 result: Linear combination of BCE and KLD based on whether the network is gamma, beta or
+                 standard VAE.
+        """
+        criterion = nn.BCEWithLogitsLoss(reduction='sum')
+        BCE = criterion(recon_x, x)
+        KLD = - 0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+        if kwargs.get('beta') is not None:
+            beta = kwargs.get('beta')
+            KLD *= beta
+            result = BCE + KLD
+            return result, BCE, KLD
+
+        if kwargs.get('gamma') is not None:
+            gamma = kwargs.get('gamma')
+            C = kwargs.get('C')
+            result = (BCE + gamma * torch.abs(KLD - C))
+            return result, BCE, KLD
+
+        result = BCE + KLD
+        return result, BCE, KLD
+
+    def train(self, epoch, writer, optimizer, train_loader, test_loader):
+        self.train()
+        train_loss = 0
+        global step
+        global images
+        global test_images
+        start_time = time.time()
+
+        # Training set
+        for data in train_loader:
+            # Try to make sure that training_set_size % batch_size == 0 to avoid bugs here
+            batch_size = data.shape[0]
+            step += 1
+            optimizer.zero_grad()
+            if step % 1000 == 0 or step == 1:
+                start_time = time.time()
+            recon_batch, probs, mu, logvar = self(data)
+            loss, BCE, KLD = self.loss_function(recon_batch, data, mu, logvar)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.detach().item()
+
+            if step % 1000 == 0 or step == 1:
+                end_time = time.time()
+                # Log performance
+                print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / batch_size))
+
+        # Test batch
+        self.eval()
+        test_loss = 0
+        data_list = []
+        global step
+        with torch.no_grad():
+            for i, data in enumerate(test_loader):
+                batch_size = data.shape[0]
+                recon_batch, probs, mu, logvar = self(data)
+                data_list.append(recon_batch)
+                t_loss, t_BCE, t_KLD = self.loss_function(recon_batch, data, mu, logvar)
+                test_loss += t_loss.item()
+
+            if step % 1000 == 0:
+                print('====> Test set loss: {:.4f}'.format(test_loss / batch_size))
+        return train_loss, test_loss
 
 class Conv3dVAE(nn.Module):
     def __init__(self, x_dim: int, z_dim: int, channels: int, layers: List, latent_dim: int, device: torch.device):
@@ -259,3 +333,78 @@ class Conv3dVAE(nn.Module):
 
         probs = torch.sigmoid(y)
         return y, probs, mu, logvar
+
+    def loss_function(self, recon_x, x, mu, logvar, **kwargs):
+        """
+        :param recon_x: Reconstructed batch of shape (N, C, Z, H, W)
+        :param x: Original input batch of shape (N, C, Z, H, W)
+        :param mu: Encoded mu representation of x.
+        :param logvar: Encoded logvar representation of x.
+        :param kwargs: Expecting beta=(scalar), gamma=(scalar), C=(scalar).
+        :return: BCE (Binary Cross-Entropy) Loss (scalar). KLD (Kullback-Leibler Divergence) loss (scalar).
+                 result: Linear combination of BCE and KLD based on whether the network is gamma, beta or
+                 standard VAE.
+        """
+        criterion = nn.BCEWithLogitsLoss(reduction='sum')
+        BCE = criterion(recon_x, x)
+        KLD = - 0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+        if kwargs.get('beta') is not None:
+            beta = kwargs.get('beta')
+            KLD *= beta
+            result = BCE + KLD
+            return result, BCE, KLD
+
+        if kwargs.get('gamma') is not None:
+            gamma = kwargs.get('gamma')
+            C = kwargs.get('C')
+            result = (BCE + gamma * torch.abs(KLD - C))
+            return result, BCE, KLD
+
+        result = BCE + KLD
+        return result, BCE, KLD
+
+    def train(self, epoch, writer, optimizer, train_loader, test_loader):
+        self.train()
+        train_loss = 0
+        global step
+        global images
+        global test_images
+        start_time = time.time()
+
+        # Training set
+        for data in train_loader:
+            # Try to make sure that training_set_size % batch_size == 0 to avoid bugs here
+            batch_size = data.shape[0]
+            step += 1
+            optimizer.zero_grad()
+            if step % 1000 == 0 or step == 1:
+                start_time = time.time()
+            recon_batch, probs, mu, logvar = self(data)
+            loss, BCE, KLD = self.loss_function(recon_batch, data, mu, logvar)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.detach().item()
+
+            if step % 1000 == 0 or step == 1:
+                end_time = time.time()
+                # Log performance
+                print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / batch_size))
+
+        # Test batch
+        self.eval()
+        test_loss = 0
+        data_list = []
+        global step
+        with torch.no_grad():
+            for i, data in enumerate(test_loader):
+                batch_size = data.shape[0]
+                recon_batch, probs, mu, logvar = self(data)
+                data_list.append(recon_batch)
+                t_loss, t_BCE, t_KLD = self.loss_function(recon_batch, data, mu, logvar)
+                test_loss += t_loss.item()
+
+            if step % 1000 == 0:
+                print('====> Test set loss: {:.4f}'.format(test_loss / batch_size))
+        return train_loss, test_loss
+
