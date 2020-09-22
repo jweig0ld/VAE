@@ -95,9 +95,6 @@ def train(model, epoch, writer, optimizer, train_loader, test_loader, control_ba
 
         model.train()
         train_loss = 0
-        global step
-        global images
-        global test_images
         start_time = time.time()
 
         # Training set
