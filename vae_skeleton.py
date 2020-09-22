@@ -2,7 +2,9 @@ import torch
 import math
 import time
 from torch import nn
+from datetime import date
 from typing import List
+from torch.utils.tensorboard import SummaryWriter
 
 """ 
 Inspiration from: https://github.com/AntixK/PyTorch-VAE/blob/master/models/vanilla_vae.py 
@@ -48,8 +50,101 @@ def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
     return math.floor(((img_dim - kernel_size + 2 * padding) / stride) + 1)
 
 
+def get_filepaths(model):
+    today = date.today()
+    today = today.strftime("%b-%d-%Y")
+    model_filepath = model.json_data['model_filepath']
+    log_filepath = model.json_data['log_filepath']
+    three_d = model.json_data['3D']
+    epochs = model.json_data['epochs']
+    batch_size = model.json_data['batch_size']
+    gamma_vae = model.json_data['gamma_vae']
+    gamma = model.json_data['gamma']
+    beta_vae = model.json_data['beta_vae']
+    beta = model.json_data['beta']
+    learning_rate = model.json_data['learning_rate']
+    latent_dim = model.json_data['latent_dim']
+    c_start = model.json_data['c_start']
+    c_finish = model.json_data['c_finish']
+
+    three_d = "3d" if three_d else "2d"
+    if beta_vae:
+        vae_type = "beta-{}".format(beta)
+    elif gamma_vae:
+        vae_type = "gamma-{}-{}-{}".format(gamma, c_start, c_finish)
+    else:
+        vae_type = "standard"
+
+    model_config = '{}_{}_{}_e-{}_bs-{}_ld-{}_lr-{}'.format(today, three_d, vae_type, epochs, batch_size, latent_dim, learning_rate)
+
+    model_filepath = model_filepath + model_config
+    log_filepath = log_filepath + model_config
+    return model_filepath, log_filepath
+
+
+def train(model, epoch, writer, optimizer, train_loader, test_loader, control_batch, test_batch):
+    step = 0
+    model = model.float()
+    model_filepath, log_filepath = get_filepaths(model)
+    training_set_size, testing_set_size = model.json_data['training_set_size'], model.json_data['testing_set_size']
+    writer = SummaryWriter(log_filepath)
+    images = control_batch
+    test_images = test_batch
+
+    for epoch in range(1, model.epochs + 1):
+
+        model.train()
+        train_loss = 0
+        global step
+        global images
+        global test_images
+        start_time = time.time()
+
+        # Training set
+        for data in train_loader:
+            # Try to make sure that training_set_size % batch_size == 0 to avoid bugs here
+            batch_size = data.shape[0]
+            step += 1
+            optimizer.zero_grad()
+            if step % 1000 == 0 or step == 1:
+                start_time = time.time()
+            recon_batch, probs, mu, logvar = model(data)
+            loss, BCE, KLD = model.loss_function(recon_batch, data, mu, logvar)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.detach().item()
+
+            if step % 1000 == 0 or step == 1:
+                end_time = time.time()
+                # Log various statistics in here
+                print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / batch_size))
+
+        # Test batch
+        model.eval()
+        test_loss = 0
+        data_list = []
+        with torch.no_grad():
+            for i, data in enumerate(test_loader):
+                batch_size = data.shape[0]
+                recon_batch, probs, mu, logvar = model(data)
+                data_list.append(recon_batch)
+                t_loss, t_BCE, t_KLD = model.loss_function(recon_batch, data, mu, logvar)
+                test_loss += t_loss.item()
+
+            if step % 1000 == 0:
+                print('====> Test set loss: {:.4f}'.format(test_loss / batch_size))
+
+        # Log the train and test loss
+        z = 1 if not model.three_d else model.z_dim
+        train_loss = train_loss / (training_set_size * z * model.x_dim ** 2)
+        test_loss = test_loss / (testing_set_size * z * model.x_dim ** 2)
+        writer.add_scalar('Train Loss per Pixel', train_loss, step)
+        writer.add_scalar('Test Loss per Pixel', test_loss, step)
+
+
 class Conv2DVAE(nn.Module):
-    def __init__(self, x_dim: int, layers: List, in_channels: int, latent_dim: int, device: torch.device):
+    def __init__(self, x_dim: int, layers: List, in_channels: int, latent_dim: int, device: torch.device, json_data,
+                 **kwargs):
         """
         :param x_dim: Assumes images are square, x_dim is the length of a side of the square.
         :param layers: List<List> of length n, where n defines the number of layers in the encoder and decoder.
@@ -59,6 +154,9 @@ class Conv2DVAE(nn.Module):
         :param in_channels: Number of input channels per image
         :param latent_dim: Size of the latent dimension (mu and logvar vectors) / encoded representation.
         :param device: torch.device object defining the device you want to train on.
+        :param json_data: The json.load result of the model's JSON config file. Any values in there are accessible
+                          through here with dictionary syntax.
+        :param kwargs:
         """
         super(Conv2DVAE, self).__init__()
 
@@ -69,6 +167,8 @@ class Conv2DVAE(nn.Module):
         self.latent_dim = latent_dim
         self.layers = new_layers
         self.device = device
+        self.json_data = json_data
+        self.three_d = False
 
         # Encoder
         modules = []
@@ -166,7 +266,7 @@ class Conv2DVAE(nn.Module):
             result = BCE + KLD
             return result, BCE, KLD
 
-        if kwargs.get('gamma') is not None:
+        elif kwargs.get('gamma') is not None:
             gamma = kwargs.get('gamma')
             C = kwargs.get('C')
             result = (BCE + gamma * torch.abs(KLD - C))
@@ -175,53 +275,11 @@ class Conv2DVAE(nn.Module):
         result = BCE + KLD
         return result, BCE, KLD
 
-    def train(self, epoch, writer, optimizer, train_loader, test_loader):
-        self.train()
-        train_loss = 0
-        global step
-        global images
-        global test_images
-        start_time = time.time()
-
-        # Training set
-        for data in train_loader:
-            # Try to make sure that training_set_size % batch_size == 0 to avoid bugs here
-            batch_size = data.shape[0]
-            step += 1
-            optimizer.zero_grad()
-            if step % 1000 == 0 or step == 1:
-                start_time = time.time()
-            recon_batch, probs, mu, logvar = self(data)
-            loss, BCE, KLD = self.loss_function(recon_batch, data, mu, logvar)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.detach().item()
-
-            if step % 1000 == 0 or step == 1:
-                end_time = time.time()
-                # Log performance
-                print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / batch_size))
-
-        # Test batch
-        self.eval()
-        test_loss = 0
-        data_list = []
-        global step
-        with torch.no_grad():
-            for i, data in enumerate(test_loader):
-                batch_size = data.shape[0]
-                recon_batch, probs, mu, logvar = self(data)
-                data_list.append(recon_batch)
-                t_loss, t_BCE, t_KLD = self.loss_function(recon_batch, data, mu, logvar)
-                test_loss += t_loss.item()
-
-            if step % 1000 == 0:
-                print('====> Test set loss: {:.4f}'.format(test_loss / batch_size))
-        return train_loss, test_loss
 
 class Conv3dVAE(nn.Module):
-    def __init__(self, x_dim: int, z_dim: int, channels: int, layers: List, latent_dim: int, device: torch.device):
-        super(Conv3dVAE, self).__init__()
+    def __init__(self, x_dim: int, z_dim: int, channels: int, layers: List, latent_dim: int, device: torch.device,
+                 json_data,
+                 **kwargs):
         """
         :param x_dim: Assuming input images are square, this defines the length of a side of the square.
         :param z_dim: The number of images in a block of input, the z dimension of the cuboid.
@@ -236,7 +294,11 @@ class Conv3dVAE(nn.Module):
                         parameter.
         :param latent_dim: Integer describing the number of latent dimensions (size of the mu and logvar encoded representations)
         :param device: Torch.device object describing the device to train the model on.
+        :param json_data: The json.load result of the model's JSON config file. Any values in there are accessible
+                          through here with dictionary syntax.
+        :param kwargs:
         """
+        super(Conv3dVAE, self).__init__()
         new_layers = clean_layers(layers, True)
 
         self.device = device
@@ -245,6 +307,8 @@ class Conv3dVAE(nn.Module):
         self.channels = channels
         self.z_dim = z_dim
         self.x_dim = x_dim
+        self.json_data = json_data
+        self.three_d = True
 
         modules = []
         current_channels = channels
@@ -355,7 +419,7 @@ class Conv3dVAE(nn.Module):
             result = BCE + KLD
             return result, BCE, KLD
 
-        if kwargs.get('gamma') is not None:
+        elif kwargs.get('gamma') is not None:
             gamma = kwargs.get('gamma')
             C = kwargs.get('C')
             result = (BCE + gamma * torch.abs(KLD - C))
@@ -363,48 +427,3 @@ class Conv3dVAE(nn.Module):
 
         result = BCE + KLD
         return result, BCE, KLD
-
-    def train(self, epoch, writer, optimizer, train_loader, test_loader):
-        self.train()
-        train_loss = 0
-        global step
-        global images
-        global test_images
-        start_time = time.time()
-
-        # Training set
-        for data in train_loader:
-            # Try to make sure that training_set_size % batch_size == 0 to avoid bugs here
-            batch_size = data.shape[0]
-            step += 1
-            optimizer.zero_grad()
-            if step % 1000 == 0 or step == 1:
-                start_time = time.time()
-            recon_batch, probs, mu, logvar = self(data)
-            loss, BCE, KLD = self.loss_function(recon_batch, data, mu, logvar)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.detach().item()
-
-            if step % 1000 == 0 or step == 1:
-                end_time = time.time()
-                # Log performance
-                print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / batch_size))
-
-        # Test batch
-        self.eval()
-        test_loss = 0
-        data_list = []
-        global step
-        with torch.no_grad():
-            for i, data in enumerate(test_loader):
-                batch_size = data.shape[0]
-                recon_batch, probs, mu, logvar = self(data)
-                data_list.append(recon_batch)
-                t_loss, t_BCE, t_KLD = self.loss_function(recon_batch, data, mu, logvar)
-                test_loss += t_loss.item()
-
-            if step % 1000 == 0:
-                print('====> Test set loss: {:.4f}'.format(test_loss / batch_size))
-        return train_loss, test_loss
-
