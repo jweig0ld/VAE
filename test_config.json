@@ -25,6 +25,6 @@
   "in_channels": 1,
   "training_set_size": 64000,
   "testing_set_size": 10240,
-  "model_filepath": "/tmpscratch/jweigold/models/3d/",
-  "log_filepath": "/tmpscratch/jweigold/logs/3d/"
+  "model_filepath": "/Users/jweigold/",
+  "log_filepath": "/Users/jweigold/"
 }

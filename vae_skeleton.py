@@ -1,6 +1,7 @@
 import torch
 import math
 import time
+import tensorboard_logger as tl
 from torch import nn
 from datetime import date
 from typing import List
@@ -50,22 +51,22 @@ def get_result_dim(img_dim: int, kernel_size: int, stride: int, padding: int):
     return math.floor(((img_dim - kernel_size + 2 * padding) / stride) + 1)
 
 
-def get_filepaths(model):
+def get_filepaths(json_data):
     today = date.today()
     today = today.strftime("%b-%d-%Y")
-    model_filepath = model.json_data['model_filepath']
-    log_filepath = model.json_data['log_filepath']
-    three_d = model.json_data['3D']
-    epochs = model.json_data['epochs']
-    batch_size = model.json_data['batch_size']
-    gamma_vae = model.json_data['gamma_vae']
-    gamma = model.json_data['gamma']
-    beta_vae = model.json_data['beta_vae']
-    beta = model.json_data['beta']
-    learning_rate = model.json_data['learning_rate']
-    latent_dim = model.json_data['latent_dim']
-    c_start = model.json_data['c_start']
-    c_finish = model.json_data['c_finish']
+    model_filepath = json_data['model_filepath']
+    log_filepath = json_data['log_filepath']
+    three_d = json_data['3D']
+    epochs = json_data['epochs']
+    batch_size = json_data['batch_size']
+    gamma_vae = json_data['gamma_vae']
+    gamma = json_data['gamma']
+    beta_vae = json_data['beta_vae']
+    beta = json_data['beta']
+    learning_rate = json_data['learning_rate']
+    latent_dim = json_data['latent_dim']
+    c_start = json_data['c_start']
+    c_finish = json_data['c_finish']
 
     three_d = "3d" if three_d else "2d"
     if beta_vae:
@@ -75,19 +76,18 @@ def get_filepaths(model):
     else:
         vae_type = "standard"
 
-    model_config = '{}_{}_{}_e-{}_bs-{}_ld-{}_lr-{}'.format(today, three_d, vae_type, epochs, batch_size, latent_dim, learning_rate)
+    model_config = '{}_{}_{}_e-{}_bs-{}_ld-{}_lr-{}'.format(today, three_d, vae_type, epochs, batch_size, latent_dim,
+                                                            learning_rate)
 
     model_filepath = model_filepath + model_config
     log_filepath = log_filepath + model_config
     return model_filepath, log_filepath
 
 
-def train(model, epoch, writer, optimizer, train_loader, test_loader, control_batch, test_batch):
+def train(model, optimizer, train_loader, test_loader, control_batch, test_batch):
     step = 0
     model = model.float()
-    model_filepath, log_filepath = get_filepaths(model)
     training_set_size, testing_set_size = model.json_data['training_set_size'], model.json_data['testing_set_size']
-    writer = SummaryWriter(log_filepath)
     images = control_batch
     test_images = test_batch
 
@@ -114,6 +114,9 @@ def train(model, epoch, writer, optimizer, train_loader, test_loader, control_ba
             if step % 1000 == 0 or step == 1:
                 end_time = time.time()
                 # Log various statistics in here
+                tl.log_grads(model, step)
+                tl.log_images_3d(model, images, test_batch, step)
+                tl.log_performance(model.writer, batch_size, start_time, end_time, step)
                 print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / batch_size))
 
         # Test batch
@@ -133,10 +136,13 @@ def train(model, epoch, writer, optimizer, train_loader, test_loader, control_ba
 
         # Log the train and test loss
         z = 1 if not model.three_d else model.z_dim
+
+        # TODO: Log C value in the event that the model is a gamma VAE
+
         train_loss = train_loss / (training_set_size * z * model.x_dim ** 2)
         test_loss = test_loss / (testing_set_size * z * model.x_dim ** 2)
-        writer.add_scalar('Train Loss per Pixel', train_loss, step)
-        writer.add_scalar('Test Loss per Pixel', test_loss, step)
+        model.writer.add_scalar('Train Loss per Pixel', train_loss, step)
+        model.writer.add_scalar('Test Loss per Pixel', test_loss, step)
 
 
 class Conv2DVAE(nn.Module):
@@ -158,6 +164,7 @@ class Conv2DVAE(nn.Module):
         super(Conv2DVAE, self).__init__()
 
         new_layers = clean_layers(layers, False)
+        model_filepath, log_filepath = get_filepaths(self)
 
         self.x_dim = x_dim
         self.in_channels = in_channels
@@ -166,6 +173,9 @@ class Conv2DVAE(nn.Module):
         self.device = device
         self.json_data = json_data
         self.three_d = False
+        self.model_filepath = model_filepath
+        self.log_filepath = log_filepath
+        self.writer = SummaryWriter(self.log_filepath)
 
         # Encoder
         modules = []
@@ -306,6 +316,10 @@ class Conv3dVAE(nn.Module):
         self.x_dim = x_dim
         self.json_data = json_data
         self.three_d = True
+        model_filepath, log_filepath = get_filepaths(self.json_data)
+        self.model_filepath = model_filepath
+        self.log_filepath = log_filepath
+        self.writer = SummaryWriter(self.log_filepath)
 
         modules = []
         current_channels = channels
